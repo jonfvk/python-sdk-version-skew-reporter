@@ -49,6 +49,8 @@ class DependencyParser:
             '[tool.poetry]'
         ]
         current_section = None
+        dependencies_array_mode = False
+        dependencies_array_lines = []
         for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith('#'):
@@ -56,11 +58,31 @@ class DependencyParser:
             if line.startswith('['):
                 current_section = line.lower()
                 in_deps = current_section in dep_sections
+                dependencies_array_mode = False
+                dependencies_array_lines = []
                 continue
             if in_deps:
                 # For [project] and [tool.poetry], look for dependencies = [ ... ]
+                if dependencies_array_mode:
+                    dependencies_array_lines.append(line)
+                    if line.endswith(']'):
+                        # End of array
+                        array_content = '\n'.join(dependencies_array_lines)
+                        dep_list = DependencyParser._extract_list_from_multiline(array_content)
+                        for dep in dep_list:
+                            name, version = DependencyParser._split_dep_string(dep)
+                            deps[name.lower()] = version
+                        dependencies_array_mode = False
+                        dependencies_array_lines = []
+                    continue
                 if line.startswith('dependencies') and '=' in line:
-                    # dependencies = ["foo>=1.0", "bar"]
+                    # dependencies = [ ... ] (could be multiline)
+                    if '[' in line and not line.rstrip().endswith(']'):
+                        # Start of multiline array
+                        dependencies_array_mode = True
+                        dependencies_array_lines = [line]
+                        continue
+                    # Single-line array
                     dep_list = DependencyParser._extract_list_from_line(line)
                     for dep in dep_list:
                         name, version = DependencyParser._split_dep_string(dep)
@@ -85,9 +107,22 @@ class DependencyParser:
         m = re.search(r'\[(.*)\]', line)
         if not m:
             return []
-        # Handle multi-line arrays
         items_str = m.group(1)
-        # If the array is split across lines, fallback to splitting by commas
+        return DependencyParser._split_toml_array_items(items_str)
+
+    @staticmethod
+    def _extract_list_from_multiline(array_content: str) -> List[str]:
+        # Extracts a list from a multiline TOML array
+        # array_content: 'dependencies = [\n  "foo>=1.0",\n  "bar"\n]'
+        m = re.search(r'\[(.*)\]', array_content, re.DOTALL)
+        if not m:
+            return []
+        items_str = m.group(1)
+        return DependencyParser._split_toml_array_items(items_str)
+
+    @staticmethod
+    def _split_toml_array_items(items_str: str) -> List[str]:
+        # Splits TOML array items, handling quoted strings and commas
         items = []
         curr = ''
         in_quote = False
