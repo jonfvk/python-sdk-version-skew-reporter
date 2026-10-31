@@ -85,7 +85,32 @@ class DependencyParser:
         m = re.search(r'\[(.*)\]', line)
         if not m:
             return []
-        items = m.group(1).split(',')
+        # Handle multi-line arrays
+        items_str = m.group(1)
+        # If the array is split across lines, fallback to splitting by commas
+        items = []
+        curr = ''
+        in_quote = False
+        quote_char = ''
+        for c in items_str:
+            if c in ('"', "'"):
+                if not in_quote:
+                    in_quote = True
+                    quote_char = c
+                    curr += c
+                elif in_quote and c == quote_char:
+                    in_quote = False
+                    curr += c
+                else:
+                    curr += c
+            elif c == ',' and not in_quote:
+                if curr.strip():
+                    items.append(curr.strip())
+                curr = ''
+            else:
+                curr += c
+        if curr.strip():
+            items.append(curr.strip())
         result = []
         for item in items:
             item = item.strip().strip('"').strip("'")
