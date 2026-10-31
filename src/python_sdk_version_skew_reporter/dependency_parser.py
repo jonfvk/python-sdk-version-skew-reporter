@@ -104,7 +104,20 @@ class DependencyParser:
             name = m.group(1)
             version = m.group(3).strip() if m.group(3) else None
             return name, version
-        return dep, None
+        # If no version spec, try to split at first occurrence of comparison operator
+        op_match = re.search(r'([=<>!~]=)', dep)
+        if op_match:
+            idx = op_match.start()
+            name = dep[:idx].strip()
+            version = dep[idx:].strip()
+            # Remove extras from name if present
+            name = re.sub(r'\[.*\]', '', name)
+            return name, version
+        # Otherwise, just base name
+        name = dep
+        # Remove extras if present
+        name = re.sub(r'\[.*\]', '', name)
+        return name, None
 
     @staticmethod
     def _extract_version_from_inline_table(val: str) -> Optional[str]:
