@@ -5,26 +5,31 @@ class DependencyParser:
     """
     Parses requirements.txt and pyproject.toml files for package names and versions.
     Returns a dictionary mapping package names to version specifiers (or None).
+    Handles extras and environment markers gracefully.
     """
     @staticmethod
     def parse_requirements_txt(content: str) -> Dict[str, Optional[str]]:
         """
         Parses requirements.txt content.
         Returns dict: {package_name: version_spec or None}
+        Handles extras (e.g., requests[security]) and environment markers.
         """
         deps = {}
-        # Regex for lines like: package==1.2.3, package>=1.0, package
-        req_line = re.compile(r"^([A-Za-z0-9_.\-]+)\s*([=<>!~]=[^#;\s]+)?")
+        # Regex for lines like: package[extras]==1.2.3; marker
+        req_line = re.compile(r"^([A-Za-z0-9_.\-]+)(\[[A-Za-z0-9_,\-]+\])?\s*([=<>!~]=[^#;\s]+)?")
         for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
             # Remove inline comments
             line = line.split('#', 1)[0].strip()
+            # Remove environment markers (after ';')
+            line = line.split(';', 1)[0].strip()
             m = req_line.match(line)
             if m:
                 name = m.group(1)
-                version = m.group(2).strip() if m.group(2) else None
+                # Ignore extras (m.group(2)), just use base name
+                version = m.group(3).strip() if m.group(3) else None
                 deps[name.lower()] = version
         return deps
 
@@ -33,7 +38,7 @@ class DependencyParser:
         """
         Parses pyproject.toml content for [project] and [tool.poetry.dependencies].
         Returns dict: {package_name: version_spec or None}
-        Only supports simple TOML parsing for dependencies sections.
+        Handles inline tables, arrays, extras, and markers.
         """
         deps = {}
         in_deps = False
@@ -62,11 +67,16 @@ class DependencyParser:
                         deps[name.lower()] = version
                 # For [project.dependencies] and [tool.poetry.dependencies], parse key = value
                 elif '=' in line:
-                    # foo = ">=1.0"
+                    # foo = ">=1.0" or foo = {version = ">=1.0", extras = ["security"]}
                     key, val = [x.strip() for x in line.split('=', 1)]
                     name = key.strip('"')
-                    version = val.strip().strip('"')
-                    deps[name.lower()] = version if version else None
+                    val = val.strip()
+                    if val.startswith('{') and val.endswith('}'):  # Inline table
+                        version = DependencyParser._extract_version_from_inline_table(val)
+                        deps[name.lower()] = version
+                    else:
+                        version = val.strip('"')
+                        deps[name.lower()] = version if version else None
         return deps
 
     @staticmethod
@@ -85,10 +95,28 @@ class DependencyParser:
 
     @staticmethod
     def _split_dep_string(dep: str) -> Tuple[str, Optional[str]]:
-        # Splits 'foo>=1.0' into ('foo', '>=1.0'), or 'bar' into ('bar', None)
-        m = re.match(r'^([A-Za-z0-9_.\-]+)\s*([=<>!~]=.+)?$', dep)
+        # Splits 'foo[extra]>=1.0; marker' into ('foo', '>=1.0')
+        # Remove environment markers
+        dep = dep.split(';', 1)[0].strip()
+        # Remove extras
+        m = re.match(r'^([A-Za-z0-9_.\-]+)(\[[A-Za-z0-9_,\-]+\])?\s*([=<>!~]=.+)?$', dep)
         if m:
             name = m.group(1)
-            version = m.group(2).strip() if m.group(2) else None
+            version = m.group(3).strip() if m.group(3) else None
             return name, version
         return dep, None
+
+    @staticmethod
+    def _extract_version_from_inline_table(val: str) -> Optional[str]:
+        # Parses a TOML inline table string like {version = ">=2.25.0", extras = ["security"]}
+        # Returns only the version string (ignoring extras/markers)
+        # Find version = "..."
+        m = re.search(r'version\s*=\s*([\'\"])([^\'\"]+)\1', val)
+        if m:
+            return m.group(2)
+        # Sometimes version is unquoted (rare)
+        m2 = re.search(r'version\s*=\s*([^,}\s]+)', val)
+        if m2:
+            return m2.group(1)
+        # If no version, fallback to None
+        return None
